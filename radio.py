@@ -5,13 +5,15 @@ from gzip import GzipFile
 from argparse import ArgumentParser
 import codecs
 
-def main(filename):
-    with GzipFile(filename) as gf:
-        data = gf.read(1024 * 1024 * 64)
-    import pdb;pdb.set_trace()
+
+IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (img_name, img_size, img_width,'
+                      ' img_height, img_metadata, img_bits, img_media_type,'
+                      ' img_major_mime, img_minor_mime, img_description,'
+                      ' img_user, img_user_text, img_timestamp, img_sha1);')
 
 
 def fix_mysqldump_single_quote_escape(statement):
+    # TODO: .replace('\\"', '"') ?
     return statement.replace("\\'", "''")
 
 
@@ -25,7 +27,7 @@ def split_oversized_insert(statement, chunk_size=300):
     for chunk in chunked_iter(subparts, chunk_size):
         chunk_statement = u'),'.join(chunk)
         if not chunk_statement.endswith(';'):
-            chunk_statement = chunk_statement + ')'
+            chunk_statement = chunk_statement + ');'
         if not chunk_statement.startswith(preface):
             chunk_statement = preface + chunk_statement
         #print chunk_statement[:48].encode('utf-8'), chunk_statement[-48:].encode('utf-8')
@@ -38,11 +40,13 @@ def db_main(filename):
     import sqlite3
     conn = sqlite3.connect(':memory:')
     cur = conn.cursor()
-    cur.execute('CREATE TABLE image (img_name, img_size, img_width, img_height, img_metadata, img_bits, img_media_type, img_major_mime, img_minor_mime, img_description, img_user, img_user_text, img_timestamp, img_sha1);')
+    cur.execute(IMAGE_TABLE_SCHEMA)
     conn.commit()
     buff = u''
 
     total_size = bytes2human(os.path.getsize(filename), 2)
+    cur_stmt_count = 0
+    skipped_stmt_count = 0
 
     reader = codecs.getreader('utf-8')
     ii_start, ii_end = 0, None
@@ -73,18 +77,19 @@ def db_main(filename):
                         full_statement = fix_mysqldump_single_quote_escape(full_statement)
                     continue
                 else:
+                    cur_stmt_count += 1
                     break
             else:
+                skipped_stmt_count += 1
                 print 'dropping a chunk'
                 continue
                 #raise RuntimeError("couldn't decipher an INSERT INTO breakup scheme")
             conn.commit()
             cur_count = cur.execute('SELECT COUNT(*) FROM image').fetchone()[0]
             cur_bytes_read = bytes2human(gf_encoded.fileobj.tell(), 2)
-            print cur_count, 'records.', cur_bytes_read, 'out of', total_size, 'read'
+            print cur_count, 'records.', cur_bytes_read, 'out of', total_size, 'read.',
+            print '(', cur_stmt_count, 'statements,', skipped_stmt_count, 'skipped)'
 
-
-    res = cur.fetchall()
     import pdb;pdb.set_trace()
 
 
