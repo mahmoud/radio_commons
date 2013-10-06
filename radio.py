@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
+import gzip
 import sqlite3
-from gzip import GzipFile
 from argparse import ArgumentParser
 import codecs
 
 
-IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (img_name, img_size, img_width,'
-                      ' img_height, img_metadata, img_bits, img_media_type,'
-                      ' img_major_mime, img_minor_mime, img_description,'
-                      ' img_user, img_user_text, img_timestamp, img_sha1);')
+_INSERT_INTO_TOKEN = 'INSERT INTO `image`'
+
+_FIELD_NAMES = ('img_name, img_size, img_width, img_height, img_metadata,'
+                ' img_bits, img_media_type, img_major_mime, img_minor_mime,'
+                ' img_description, img_user, img_user_text, img_timestamp,'
+                ' img_sha1').split(', ')
+IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (%s);' % ', '.join(_FIELD_NAMES))
 READ_SIZE = 2 ** 15  # 32kb
 
 
@@ -20,7 +24,7 @@ def fix_mysqldump_single_quote_escape(statement):
 
 
 def split_oversized_insert(statement, chunk_size=300):
-    if not statement.startswith('INSERT INTO'):
+    if not statement.startswith(_INSERT_INTO_TOKEN):
         raise ValueError('statement should start with INSERT INTO')
     value_start_idx = statement.index('VALUES (') + len('VALUES (') - 1
     preface = statement[:value_start_idx]
@@ -38,35 +42,45 @@ def split_oversized_insert(statement, chunk_size=300):
     return ret
 
 
-def create_table():
-    conn = sqlite3.connect(':memory:')
-    cur = conn.cursor()
-    cur.execute(IMAGE_TABLE_SCHEMA)
+def create_table(location=':memory:'):
+    conn = sqlite3.connect(location)
+    conn.execute(IMAGE_TABLE_SCHEMA)
     conn.commit()
     return conn
 
 
-def db_main(filename):
-    conn = create_table()
+class DatabaseLoader(object):
+    def __init__(self, source_file, target_db_file):
+        self.source_file = source_file
+        self.start_time = time.time()
+        self.total_size = bytes2human(os.path.getsize(source_file), 2)
+        self.cur_stmt_count = 0
+        self.skipped_stmt_count = 0
+        self.decoder = codecs.getreader('utf-8')
 
-    total_size = bytes2human(os.path.getsize(filename), 2)
-    cur_stmt_count = 0
-    skipped_stmt_count = 0
+        self.buff = u''
 
-    reader = codecs.getreader('utf-8')
-    with GzipFile(filename, 'r') as gf_encoded:
-        gf = reader(gf_encoded, errors='replace')
-        data = gf.read(4096)
-        buff = data[data.index('INSERT INTO'):]
+        self.temp_table = create_table(':memory:')
+        self.perm_table = create_table(target_db_file)
 
+        with gzip.open(self.source_file) as gf_encoded:
+            self._load(gf_encoded)
+
+    def _load(self, file_handle, verbose=True):
+        file_handle_encoded = file_handle
+        file_handle = self.decoder(file_handle, errors='replace')
+        data = file_handle.read(4096)
+        self.buff = data[data.index(_INSERT_INTO_TOKEN):]
+
+        tt_cur = self.temp_table.cursor()
         while data:
-            data = gf.read(READ_SIZE)
-            buff += data
+            data = file_handle.read(READ_SIZE)
+            self.buff += data
 
-            ii_end = buff.find('INSERT INTO', 11)
+            ii_end = self.buff.find(_INSERT_INTO_TOKEN, 11)
             if ii_end < 0:
                 continue
-            full_statement, buff = buff[:ii_end].strip(), buff[ii_end:]
+            full_statement, self.buff = self.buff[:ii_end].strip(), self.buff[ii_end:]
             
             full_statement = fix_mysqldump_single_quote_escape(full_statement)
             for _retry_i in range(9):
@@ -74,28 +88,48 @@ def db_main(filename):
                     chunk_size = 500 - (_retry_i * 17)
                     chunked_statements = split_oversized_insert(full_statement, chunk_size=chunk_size)
                     for stmt in chunked_statements:
-                        cur.execute(stmt)
+                        tt_cur.execute(stmt)
                 except sqlite3.OperationalError as oe:
                     #print oe  # some exceptions can be very very long
                     if 'syntax error' in oe.message:
                         full_statement = fix_mysqldump_single_quote_escape(full_statement)
                     continue
                 else:
-                    cur_stmt_count += 1
+                    self.cur_stmt_count += 1
                     break
             else:
-                skipped_stmt_count += 1
-                print 'skipping an insert statement'
-                continue
                 #raise RuntimeError("couldn't decipher an INSERT INTO breakup scheme")
-            conn.commit()
-            cur_count = cur.execute('SELECT COUNT(*) FROM image').fetchone()[0]
-            cur_bytes_read = bytes2human(gf_encoded.fileobj.tell(), 2)
-            print cur_count, 'records.', cur_bytes_read, 'out of', total_size, 'read.',
-            print '(', cur_stmt_count, 'statements,', skipped_stmt_count, 'skipped)'
+                self.skipped_stmt_count += 1
+                continue
 
-    import pdb;pdb.set_trace()
+            self.temp_table.commit()
+            cur_count = tt_cur.execute('SELECT COUNT(*) FROM image').fetchone()[0]
+            cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
+            cur_duration = round(time.time() - self.start_time, 2)
+            if cur_count > 100000:
+                self._flush_temp()
+                tt_cur = self.temp_table.cursor()
+            if verbose:
+                print cur_count, 'records.', cur_bytes_read, 'out of', self.total_size, 'read. (',
+                print self.cur_stmt_count, 'statements,', self.skipped_stmt_count, 'skipped)',
+                print cur_duration, 'seconds.'
 
+
+        import pdb;pdb.set_trace()
+
+    def _flush_temp(self):
+        audios = self.temp_table.execute('SELECT * FROM image WHERE img_media_type="AUDIO"').fetchall()
+        pt_cur = self.perm_table.cursor()
+        _query = 'INSERT INTO image VALUES (%s)' % ', '.join('?' * len(_FIELD_NAMES))
+        for a in audios:
+            pt_cur.execute(_query, a)
+        self.perm_table.commit()
+        self.temp_table = create_table(':memory:')
+            
+            
+
+def db_main(filename):
+    db_loader = DatabaseLoader(filename, 'lel.db')
 
 def chunked_iter(src, size, **kw):
     """
