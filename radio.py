@@ -2,7 +2,7 @@
 
 from gzip import GzipFile
 from argparse import ArgumentParser
-
+import codecs
 
 def main(filename):
     with GzipFile(filename) as gf:
@@ -17,8 +17,10 @@ def db_main(filename):
     cur.execute('CREATE TABLE image (img_name, img_size, img_width, img_height, img_metadata, img_bits, img_media_type, img_major_mime, img_minor_mime, img_description, img_user, img_user_text, img_timestamp, img_sha1);')
     
     buff = u''
+    reader = codecs.getreader('utf-8')
     ii_start, ii_end = 0, None
-    with GzipFile(filename, 'rb') as gf:
+    with GzipFile(filename, 'r') as gf_encoded:
+        gf = reader(gf_encoded, errors='replace')
         data = gf.read(4096)
         buff = data[data.index('INSERT INTO'):]
         data = gf.read(1024 * 1024 * 2)
@@ -27,7 +29,7 @@ def db_main(filename):
         ii_end = buff.find('INSERT INTO', 11)
         if ii_end > 0:
             full_statement, buff = buff[ii_start:ii_end], buff[ii_end:]
-            full_statement = full_statement.decode('utf-8')
+            full_statement = full_statement
 
         replaced = full_statement.replace("\\'", "''")
         splitted = replaced.split('),')
