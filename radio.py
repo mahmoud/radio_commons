@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sqlite3
 from gzip import GzipFile
 from argparse import ArgumentParser
 import codecs
@@ -10,6 +11,7 @@ IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (img_name, img_size, img_width,'
                       ' img_height, img_metadata, img_bits, img_media_type,'
                       ' img_major_mime, img_minor_mime, img_description,'
                       ' img_user, img_user_text, img_timestamp, img_sha1);')
+READ_SIZE = 2 ** 15  # 32kb
 
 
 def fix_mysqldump_single_quote_escape(statement):
@@ -36,33 +38,35 @@ def split_oversized_insert(statement, chunk_size=300):
     return ret
 
 
-def db_main(filename):
-    import sqlite3
+def create_table():
     conn = sqlite3.connect(':memory:')
     cur = conn.cursor()
     cur.execute(IMAGE_TABLE_SCHEMA)
     conn.commit()
-    buff = u''
+    return conn
+
+
+def db_main(filename):
+    conn = create_table()
 
     total_size = bytes2human(os.path.getsize(filename), 2)
     cur_stmt_count = 0
     skipped_stmt_count = 0
 
     reader = codecs.getreader('utf-8')
-    ii_start, ii_end = 0, None
     with GzipFile(filename, 'r') as gf_encoded:
         gf = reader(gf_encoded, errors='replace')
         data = gf.read(4096)
         buff = data[data.index('INSERT INTO'):]
 
         while data:
-            data = gf.read(32768)
+            data = gf.read(READ_SIZE)
             buff += data
 
             ii_end = buff.find('INSERT INTO', 11)
             if ii_end < 0:
                 continue
-            full_statement, buff = buff[ii_start:ii_end].strip(), buff[ii_end:]
+            full_statement, buff = buff[:ii_end].strip(), buff[ii_end:]
             
             full_statement = fix_mysqldump_single_quote_escape(full_statement)
             for _retry_i in range(9):
@@ -81,7 +85,7 @@ def db_main(filename):
                     break
             else:
                 skipped_stmt_count += 1
-                print 'dropping a chunk'
+                print 'skipping an insert statement'
                 continue
                 #raise RuntimeError("couldn't decipher an INSERT INTO breakup scheme")
             conn.commit()
