@@ -7,7 +7,7 @@ import sqlite3
 from argparse import ArgumentParser
 import codecs
 
-import phpserialize
+import serek
 
 _FIELD_NAMES = ('img_name, img_size, img_width, img_height, img_metadata,'
                 ' img_bits, img_media_type, img_major_mime, img_minor_mime,'
@@ -33,10 +33,10 @@ def main(filename):
         name = record[0]
         metadata_string = record[4]
         try:
-            metadata = phpserialize.loads(metadata_string.replace(u'\\"', u'\"'))
+            metadata = serek.loads(metadata_string.replace(u'\\"', u'\"'))
         except:
             try:
-                metadata = phpserialize.loads(metadata_string.encode('utf-8').decode('unicode-escape'))
+                metadata = serek.loads(metadata_string.encode('utf-8').decode('unicode-escape'))
             except:
                 _broken_metadata[name] = metadata_string
                 continue
@@ -60,8 +60,8 @@ def main(filename):
             print i, 'records complete in', time.time() - start_time, 'seconds.'
     import pdb;pdb.set_trace()
     return
-        
-    
+
+
 
 
 if __name__ == '__main__':
