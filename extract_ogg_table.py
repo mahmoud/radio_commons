@@ -73,15 +73,25 @@ class DatabaseLoader(object):
     def _load(self, file_handle, verbose=True):
         file_handle_encoded = file_handle
         file_handle = self.decoder(file_handle, errors='replace')
-        internet_of_things = []
+
         stmt_count = 0
-        for line in file_handle:
-            if not line.startswith('INSERT'):
+        internet_of_things = []
+
+        data = file_handle.read(4096)
+        self.buff = data[data.index(_INSERT_INTO_TOKEN):]
+
+        while data:
+            data = file_handle.read(READ_SIZE)
+            self.buff += data
+
+            ii_end = self.buff.find(_INSERT_INTO_TOKEN, 11)
+            if ii_end < 0:
                 continue
-            for m in _TUPLE_RE.finditer(line):
+            stmt_count += 1
+            full_statement, self.buff = self.buff[:ii_end].strip(), self.buff[ii_end:]
+            for m in _TUPLE_RE.finditer(full_statement):
                 internet_of_things.append(ast.literal_eval(m.group()))
 
-            stmt_count += 1
             cur_count = len(internet_of_things)
             cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
             cur_duration = round(time.time() - self.start_time, 2)
