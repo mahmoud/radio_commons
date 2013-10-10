@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
+import ast
 import time
 import gzip
 import sqlite3
@@ -16,6 +18,8 @@ _FIELD_NAMES = ('img_name, img_size, img_width, img_height, img_metadata,'
                 ' img_sha1').split(', ')
 IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (%s);' % ', '.join(_FIELD_NAMES))
 READ_SIZE = 2 ** 15  # 32kb
+_LITERAL = r"('([^'\\]*(?:\\.[^'\\]*)*)'|\d+)"
+_TUPLE_RE = re.compile(r"\(%s(,%s)*\)" % (_LITERAL, _LITERAL))
 
 
 def fix_mysqldump_single_quote_escape(statement):
@@ -69,6 +73,31 @@ class DatabaseLoader(object):
     def _load(self, file_handle, verbose=True):
         file_handle_encoded = file_handle
         file_handle = self.decoder(file_handle, errors='replace')
+        internet_of_things = []
+        stmt_count = 0
+        for line in file_handle:
+            if not line.startswith('INSERT'):
+                continue
+            for m in _TUPLE_RE.finditer(line):
+                internet_of_things.append(ast.literal_eval(m.group()))
+
+            stmt_count += 1
+            cur_count = len(internet_of_things)
+            cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
+            cur_duration = round(time.time() - self.start_time, 2)
+
+            if verbose:
+                print cur_count, 'records.', cur_bytes_read, 'out of', self.total_size, 'read. (',
+                print stmt_count, 'statements,', self.skipped_stmt_count, 'skipped)',
+                print cur_duration, 'seconds.'
+
+            if len(internet_of_things) > 100000:
+                import pdb;pdb.set_trace()
+
+
+    def _old_load(self, file_handle, verbose=True):
+        file_handle_encoded = file_handle
+        file_handle = self.decoder(file_handle, errors='replace')
         data = file_handle.read(4096)
         self.buff = data[data.index(_INSERT_INTO_TOKEN):]
 
@@ -81,7 +110,7 @@ class DatabaseLoader(object):
             if ii_end < 0:
                 continue
             full_statement, self.buff = self.buff[:ii_end].strip(), self.buff[ii_end:]
-            
+
             full_statement = fix_mysqldump_single_quote_escape(full_statement)
             for _retry_i in range(9):
                 try:
@@ -125,11 +154,11 @@ class DatabaseLoader(object):
             pt_cur.execute(_query, a)
         self.perm_table.commit()
         self.temp_table = create_table(':memory:')
-            
-            
+
+
 
 def db_main(filename):
-    db_loader = DatabaseLoader(filename, 'lel.db')
+    db_loader = DatabaseLoader(filename, 'ogg_table.db')
 
 def chunked_iter(src, size, **kw):
     """
