@@ -57,8 +57,11 @@ def main(filename):
         metadata_db.execute(_insert_query, record + (length, channels, nominal_bitrate, vendor, stream_count))
         i += 1
         if i % 100 == 0:
-            print i, 'records complete in', time.time() - start_time, 'seconds.'
-    import pdb;pdb.set_trace()
+            cur_dur = time.time() - start_time
+            print i, 'records complete in', round(cur_dur, 2), 'seconds.',
+            print len(_broken_metadata), 'records skipped.'
+    metadata_db.commit()
+    metadata_db.close()
     return
 
 
