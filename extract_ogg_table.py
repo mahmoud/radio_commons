@@ -22,29 +22,6 @@ _LITERAL = r"('([^'\\]*(?:\\.[^'\\]*)*)'|\d+)"
 _TUPLE_RE = re.compile(r"\(%s(,%s)*\)" % (_LITERAL, _LITERAL))
 _IMG_TYPE_IDX = 6
 
-def fix_mysqldump_single_quote_escape(statement):
-    # TODO: .replace('\\"', '"') ?
-    return statement.replace("\\'", "''")
-
-
-def split_oversized_insert(statement, chunk_size=300):
-    if not statement.startswith(_INSERT_INTO_TOKEN):
-        raise ValueError('statement should start with INSERT INTO')
-    value_start_idx = statement.index('VALUES (') + len('VALUES (') - 1
-    preface = statement[:value_start_idx]
-    ret = []
-    subparts = statement.split('),')
-    for chunk in chunked_iter(subparts, chunk_size):
-        chunk_statement = u'),'.join(chunk)
-        if not chunk_statement.endswith(';'):
-            chunk_statement = chunk_statement + ');'
-        if not chunk_statement.startswith(preface):
-            chunk_statement = preface + chunk_statement
-        #print chunk_statement[:48].encode('utf-8'), chunk_statement[-48:].encode('utf-8')
-        #print
-        ret.append(chunk_statement)
-    return ret
-
 
 def create_table(location=':memory:'):
     conn = sqlite3.connect(location)
@@ -75,6 +52,7 @@ class DatabaseLoader(object):
         file_handle = self.decoder(file_handle, errors='replace')
 
         stmt_count = 0
+        total_record_count = 0
         internet_of_things = []
 
         data = file_handle.read(4096)
@@ -117,70 +95,10 @@ class DatabaseLoader(object):
                 internet_of_things = []
         return
 
-    def _old_load(self, file_handle, verbose=True):
-        file_handle_encoded = file_handle
-        file_handle = self.decoder(file_handle, errors='replace')
-        data = file_handle.read(4096)
-        self.buff = data[data.index(_INSERT_INTO_TOKEN):]
-
-        tt_cur = self.temp_table.cursor()
-        while data:
-            data = file_handle.read(READ_SIZE)
-            self.buff += data
-
-            ii_end = self.buff.find(_INSERT_INTO_TOKEN, 11)
-            if ii_end < 0:
-                continue
-            full_statement, self.buff = self.buff[:ii_end].strip(), self.buff[ii_end:]
-
-            full_statement = fix_mysqldump_single_quote_escape(full_statement)
-            for _retry_i in range(9):
-                try:
-                    chunk_size = 500 - (_retry_i * 17)
-                    chunked_statements = split_oversized_insert(full_statement, chunk_size=chunk_size)
-                    for stmt in chunked_statements:
-                        tt_cur.execute(stmt)
-                except sqlite3.OperationalError as oe:
-                    #print oe  # some exceptions can be very very long
-                    if 'syntax error' in oe.message:
-                        full_statement = fix_mysqldump_single_quote_escape(full_statement)
-                    continue
-                else:
-                    self.cur_stmt_count += 1
-                    break
-            else:
-                #raise RuntimeError("couldn't decipher an INSERT INTO breakup scheme")
-                self.skipped_stmt_count += 1
-                continue
-
-            self.temp_table.commit()
-            cur_count = tt_cur.execute('SELECT COUNT(*) FROM image').fetchone()[0]
-            cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
-            cur_duration = round(time.time() - self.start_time, 2)
-            if cur_count > 100000:
-                self._flush_temp()
-                tt_cur = self.temp_table.cursor()
-            if verbose:
-                print cur_count, 'records.', cur_bytes_read, 'out of', self.total_size, 'read. (',
-                print self.cur_stmt_count, 'statements,', self.skipped_stmt_count, 'skipped)',
-                print cur_duration, 'seconds.'
-
-
-        import pdb;pdb.set_trace()
-
-    def _flush_temp(self):
-        audios = self.temp_table.execute('SELECT * FROM image WHERE img_media_type="AUDIO"').fetchall()
-        pt_cur = self.perm_table.cursor()
-        _query = 'INSERT INTO image VALUES (%s)' % ', '.join('?' * len(_FIELD_NAMES))
-        for a in audios:
-            pt_cur.execute(_query, a)
-        self.perm_table.commit()
-        self.temp_table = create_table(':memory:')
-
-
 
 def db_main(filename):
     db_loader = DatabaseLoader(filename, 'ogg_table.db')
+
 
 def chunked_iter(src, size, **kw):
     """
