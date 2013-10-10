@@ -17,10 +17,10 @@ _FIELD_NAMES = ('img_name, img_size, img_width, img_height, img_metadata,'
                 ' img_description, img_user, img_user_text, img_timestamp,'
                 ' img_sha1').split(', ')
 IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (%s);' % ', '.join(_FIELD_NAMES))
-READ_SIZE = 2 ** 15  # 32kb
+READ_SIZE = 2 ** 18  # 256kb
 _LITERAL = r"('([^'\\]*(?:\\.[^'\\]*)*)'|\d+)"
 _TUPLE_RE = re.compile(r"\(%s(,%s)*\)" % (_LITERAL, _LITERAL))
-
+_IMG_TYPE_IDX = 6
 
 def fix_mysqldump_single_quote_escape(statement):
     # TODO: .replace('\\"', '"') ?
@@ -90,7 +90,13 @@ class DatabaseLoader(object):
             stmt_count += 1
             full_statement, self.buff = self.buff[:ii_end].strip(), self.buff[ii_end:]
             for m in _TUPLE_RE.finditer(full_statement):
-                internet_of_things.append(ast.literal_eval(m.group()))
+                group = m.group()
+                if 'AUDIO' not in group:
+                    continue
+                val_tuple = ast.literal_eval(group)
+                if val_tuple[_IMG_TYPE_IDX] != "AUDIO":
+                    continue
+                internet_of_things.append(val_tuple)
 
             cur_count = len(internet_of_things)
             cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
@@ -101,8 +107,9 @@ class DatabaseLoader(object):
                 print stmt_count, 'statements,', self.skipped_stmt_count, 'skipped)',
                 print cur_duration, 'seconds.'
 
-            if len(internet_of_things) > 100000:
-                import pdb;pdb.set_trace()
+            if len(internet_of_things) > 1000:
+                return
+
 
 
     def _old_load(self, file_handle, verbose=True):
