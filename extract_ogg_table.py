@@ -96,21 +96,26 @@ class DatabaseLoader(object):
                 val_tuple = ast.literal_eval(group)
                 if val_tuple[_IMG_TYPE_IDX] != "AUDIO":
                     continue
-                internet_of_things.append(val_tuple)
+                internet_of_things.append([v.decode('utf-8') if type(v) is str else v
+                                           for v in val_tuple])
 
             cur_count = len(internet_of_things)
             cur_bytes_read = bytes2human(file_handle_encoded.fileobj.tell(), 2)
             cur_duration = round(time.time() - self.start_time, 2)
 
-            if verbose:
+            if verbose and stmt_count % 5 == 0:
                 print cur_count, 'records.', cur_bytes_read, 'out of', self.total_size, 'read. (',
                 print stmt_count, 'statements,', self.skipped_stmt_count, 'skipped)',
                 print cur_duration, 'seconds.'
 
             if len(internet_of_things) > 1000:
-                return
-
-
+                _query = u'INSERT INTO image VALUES (%s)' % ', '.join('?' * len(_FIELD_NAMES))
+                pt_cur = self.perm_table.cursor()
+                for a in internet_of_things:
+                    pt_cur.execute(_query, a)
+                self.perm_table.commit()
+                internet_of_things = []
+        return
 
     def _old_load(self, file_handle, verbose=True):
         file_handle_encoded = file_handle
