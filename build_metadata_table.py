@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
 
-import os
 import time
-import gzip
 import sqlite3
 from argparse import ArgumentParser
-import codecs
 
 import phpserialize
 
@@ -14,8 +11,11 @@ _FIELD_NAMES = ('img_name, img_size, img_width, img_height, img_metadata,'
                 ' img_description, img_user, img_user_text, img_timestamp,'
                 ' img_sha1').split(', ')
 IMAGE_TABLE_SCHEMA = ('CREATE TABLE image (%s);' % ', '.join(_FIELD_NAMES))
-METADATA_ONLY_FIELDS = ['length', 'channels', 'nom_bitrate', 'vendor', 'stream_count']
-METADATA_TABLE_SCHEMA = 'CREATE TABLE audio_metadata (%s);' % ', '.join(_FIELD_NAMES + METADATA_ONLY_FIELDS)
+METADATA_ONLY_FIELDS = ['length', 'channels', 'nom_bitrate',
+                        'vendor', 'stream_count']
+_ALL_FIELDS = _FIELD_NAMES + METADATA_ONLY_FIELDS
+METADATA_TABLE_SCHEMA = ('CREATE TABLE audio_metadata (%s);'
+                         % ', '.join(_ALL_FIELDS))
 
 
 def main(filename):
@@ -29,6 +29,7 @@ def main(filename):
     _insert_query = 'INSERT INTO audio_metadata VALUES (%s)' % ', '.join('?' * len(_FIELD_NAMES + METADATA_ONLY_FIELDS))
     i = 0
     start_time = time.time()
+    _broken_metadata = {}
     for record in ogg_cursor:
         name = record[0]
         metadata_string = record[4]
@@ -65,10 +66,9 @@ def main(filename):
     return
 
 
-
-
 if __name__ == '__main__':
     prs = ArgumentParser()
     prs.add_argument('filename')
     args = prs.parse_args()
+
     main(args.filename)
